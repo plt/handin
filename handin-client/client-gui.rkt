@@ -39,13 +39,20 @@
 (define multifile?
   (#%info-lookup 'enable-multifile-handin (lambda () #f)))
 
-(define preference-key (make-my-key 'submit:username))
-
-(preferences:set-default preference-key "" string?)
+(define username-key (make-my-key 'submit:username))
+(preferences:set-default username-key "" string?)
 (define (remembered-user)
-  (preferences:get preference-key))
+  (preferences:get username-key))
 (define (remember-user user)
-  (preferences:set preference-key user))
+  (preferences:set username-key user))
+
+(define password-key (make-my-key 'submit:password))
+(preferences:set-default password-key #f (lambda (x) (or (boolean? x) (string? x))))
+(define (remembered-password)
+  (preferences:get password-key))
+(define (remember-password password)
+  (preferences:set password-key password))
+
 
 (define remembered-assignment (make-parameter #f))
 
@@ -76,32 +83,34 @@
                                    (protect (lambda ()
                                               (set! passwd #f)
                                               (set! timer #f)))))))))])))
-;; a password entry box that uses the one cached above
-(define cached-passwd%
+
+;; a password entry box that uses the one cached/remembered
+(define passwd-field%
   (class text-field%
-    (define cached (cached-password))
-    ;; use this instead of a cached password -- to avoid copy/pastes
+    (define fetched-passwd (or (remembered-password) (cached-password)))
+    ;; use this instead of a remembered/cached password -- to avoid copy/pastes
     ;; of a password, and to hide its length
     (define fake-value "CACHED PASSWD")
     (define/override (get-value)
-      (or cached (super get-value)))
+      (or fetched-passwd (super get-value)))
     (define/override (on-focus on?)
       (if on?
         ;; got focus -- clear out bogus contents, if any
-        (when cached (send this set-value "") (set! cached #f))
-        ;; lost focus -- remember a new password, or restore it
+        (when fetched-passwd (send this set-value "") (set! fetched-passwd #f))
+        ;; lost focus -- restore password if remembered/cached
         (let ([p (super get-value)])
           (cond [(and p (not (string=? "" p)))
-                 ;; don't behave as if we have a cache: don't clear
+                 ;; behave as if we don't have a cache: don't clear
                  ;; the value now, or if we get the focus later
-                 (set! cached #f)
+                 (set! fetched-passwd #f)
                  (cached-password p)]
-                [(cached-password)
-                 => (lambda (p)
-                      (set! cached p)
+                [(or (remembered-password) (cached-password))
+                 => (lambda (pass)
+                      (set! fetched-passwd pass)
                       (send this set-value fake-value))]))))
-    (super-new [init-value (if cached fake-value "")]
+    (super-new [init-value (if fetched-passwd fake-value "")]
                [style '(single password)])))
+
 
 (provide handin-frame%)
 (define handin-frame%
@@ -128,12 +137,26 @@
            [parent this]
            [callback (lambda (t e) (activate-ok))]
            [stretchable-width #t]))
+
     (define passwd
-      (new cached-passwd%
+      (new passwd-field%
            [label "Password:"]
            [parent this]
            [callback (lambda (t e) (activate-ok))]
            [stretchable-width #t]))
+
+    (define save-passwd-box
+      (new horizontal-pane%
+           [parent this]
+           [alignment '(right top)]))
+
+    (define save-password?
+      (new check-box%
+           [label "Save Password"]
+           [parent save-passwd-box]
+           [value (if (remembered-password) #t #f)]
+           [stretchable-width #f]))
+
     (define assignment
       (new choice%
            [label "Submit to:"]
@@ -227,6 +250,10 @@
                 (thread
                  (lambda ()
                    (remember-user (send username get-value))
+                   (remember-password 
+                     (if (send save-password? get-value) 
+                         (send passwd get-value) #f))
+                   (cached-password )
                    (with-handlers ([void (lambda (exn)
                                            (report-error "Handin failed." exn))])
                      (if (send retrieve? get-value)
@@ -434,6 +461,7 @@
                                               (if new? "Creation" "Update"))
                                       exn))])
                (remember-user (send username get-value))
+               
                (send status set-label "Making secure connection...")
                (let ([h (connect)])
                  (define (run proc . fields)
@@ -526,7 +554,7 @@
     (define old-username (mk-txt "Username:" old-user-box activate-change))
     (send old-username set-value (remembered-user))
     (define old-passwd
-      (new cached-passwd%
+      (new passwd-field%
            [label "Old Password:"]
            [parent old-user-box]
            [callback (lambda (t e) (activate-change))]
